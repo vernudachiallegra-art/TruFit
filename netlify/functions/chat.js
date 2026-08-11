@@ -81,11 +81,13 @@ exports.handler = async function (event) {
       .join("\n");
 
     // The AI was told to reply in JSON so app.js can rebuild real product cards.
-    // If it ever slips up and sends plain text instead, fall back gracefully
-    // rather than showing the shopper a broken page.
+    // Sometimes it wraps the JSON in ```json fences even when told not to — strip
+    // those out before trying to parse, rather than relying on it to be perfect.
+    const cleanedText = rawText.replace(/```json/gi, "").replace(/```/g, "").trim();
+
     let parsed;
     try {
-      parsed = JSON.parse(rawText);
+      parsed = JSON.parse(cleanedText);
     } catch (e) {
       parsed = { reply: rawText, products: [], overBudget: [] };
     }
