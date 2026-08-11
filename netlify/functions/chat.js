@@ -41,7 +41,13 @@ exports.handler = async function (event) {
       "\n\nHere is the full TruFit product catalogue as JSON. Only ever recommend items " +
       "from this list, using their exact name, price and link — never invent a product, " +
       "price or link that isn't in here:\n" +
-      JSON.stringify(PRODUCTS);
+      JSON.stringify(PRODUCTS) +
+      // This bit isn't one of Allegra's rules — it's a technical formatting instruction so
+      // app.js can turn the AI's answer back into real clickable product cards.
+      "\n\nIMPORTANT — reply format: respond with ONLY valid JSON, no other text and no " +
+      "markdown code fences, in exactly this shape:\n" +
+      '{"reply": "your conversational message here", "products": ["Exact Product Name From Catalogue"], "overBudget": ["Exact Product Name From Catalogue, only if it is priced above what the shopper asked for"]}\n' +
+      'Use the EXACT product name spelling from the catalogue above. If you have no products to suggest, use "products": [].';
 
     const response = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
@@ -69,15 +75,29 @@ exports.handler = async function (event) {
     }
 
     // The API returns an array of content blocks — join up the text ones.
-    const reply = data.content
+    const rawText = data.content
       .filter((block) => block.type === "text")
       .map((block) => block.text)
       .join("\n");
 
+    // The AI was told to reply in JSON so app.js can rebuild real product cards.
+    // If it ever slips up and sends plain text instead, fall back gracefully
+    // rather than showing the shopper a broken page.
+    let parsed;
+    try {
+      parsed = JSON.parse(rawText);
+    } catch (e) {
+      parsed = { reply: rawText, products: [], overBudget: [] };
+    }
+
     return {
       statusCode: 200,
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ reply }),
+      body: JSON.stringify({
+        reply: parsed.reply || rawText,
+        products: parsed.products || [],
+        overBudget: parsed.overBudget || [],
+      }),
     };
   } catch (err) {
     console.error("TruFit chat function error:", err);
