@@ -12,16 +12,13 @@
   Netlify's dashboard: Site settings → Environment variables → add ANTHROPIC_API_KEY.
   It is never written in this file, never committed to GitHub, and never sent to the browser.
 
-  SESSION 10 FIX:
-  The AI was asked (in system-prompt.js) to do budget maths itself — multiply the
-  shopper's budget by 1.2 and never show anything priced above that. AIs don't always
-  follow maths instructions perfectly, and real testing showed it slipping up (a £65
-  trainer got shown for a £35 budget with no warning label).
-  So this file no longer trusts the AI's maths. It works out the shopper's real budget
-  itself using plain JavaScript, then double-checks every product the AI picked against
-  the real price in the catalogue — deleting anything over budget and correcting the
-  "over budget" labels itself. The AI can still get it right or wrong; it no longer matters,
-  because JavaScript has the final say.
+  SESSION 10 FIXES:
+  Two things kept breaking because they only lived as WORDING in system-prompt.js, and
+  AIs don't always follow wording perfectly:
+    1. Budget (max AND now min) — a £65 trainer got shown for a £35 budget once.
+    2. "Three picks" — five items came back once instead of three.
+  Both are now checked in plain JavaScript after the AI replies, so the AI's opinion no
+  longer matters — the code has the final say, every single time.
 */
 
 const { PRODUCTS } = require("../../products.js");
@@ -34,38 +31,67 @@ const MODEL = "claude-haiku-4-5-20251001";
 // Rule 4's allowance — kept as one named constant so it only ever needs changing in one place.
 const OVER_BUDGET_ALLOWANCE = 0.2; // 20%
 
-// Looks through the shopper's messages (most recent first) for a stated budget,
-// e.g. "under £35", "£35", "budget £35". Same pattern app.js's old parseQuery used,
-// so the two stay consistent. Returns a number, or null if no budget has been mentioned yet.
-function extractBudget(messages) {
-  let budget = null;
+// The most products ever shown at once, per "The answer format" rule in system-prompt.js.
+const MAX_PICKS = 3;
+
+// Looks through the shopper's messages for a stated budget and returns { min, max }.
+// Either can be null if the shopper hasn't mentioned that side of it.
+// Catches:
+//   "between £20 and £40" / "20-40" / "20 to 40"   -> both min and max
+//   "over £20" / "above £20" / "at least £20"      -> min only
+//   "under £40" / "£40" / "budget £40"              -> max only
+// NOTE: this is a simple pattern, not full language understanding — e.g. "between size 8
+// and 10" could be misread as a min/max budget if it's not near a £ sign or the word
+// "budget"/"price". Keep an eye on this in testing and we can tighten it if it misfires.
+function extractBudgetRange(messages) {
+  let min = null;
+  let max = null;
+
   for (const m of messages) {
     if (m.role !== "user") continue;
     const text = typeof m.content === "string" ? m.content : "";
     const lower = text.toLowerCase();
-    const match =
+
+    // Both numbers in one go, e.g. "between £20 and £40", "20-40", "20 to 40".
+    const rangeMatch = lower.match(/[£$]?\s*(\d{1,4})\s*(?:-|to|and)\s*[£$]?\s*(\d{1,4})/);
+    if (rangeMatch) {
+      min = parseInt(rangeMatch[1], 10);
+      max = parseInt(rangeMatch[2], 10);
+      continue; // this message already gave us both — move to the next message
+    }
+
+    // Minimum only.
+    const minMatch = lower.match(/(?:over|above|at least|minimum|min)\s*[£$]?\s*(\d{1,4})/);
+    if (minMatch) {
+      min = parseInt(minMatch[1], 10);
+    }
+
+    // Maximum only.
+    const maxMatch =
       lower.match(/under\s*[£$]?\s*(\d{1,4})/) ||
       lower.match(/[£$]\s*(\d{1,4})/) ||
       lower.match(/budget\s*[£$]?\s*(\d{1,4})/);
-    if (match) {
-      // Keep overwriting as we go through in order, so the LATEST stated budget wins
+    if (maxMatch) {
+      // Keep overwriting as we go through in order, so the LATEST stated amount wins
       // (e.g. if the shopper changes their mind partway through the chat).
-      budget = parseInt(match[1], 10);
+      max = parseInt(maxMatch[1], 10);
     }
   }
-  return budget;
+
+  return { min, max };
 }
 
-// The real safety net. Takes what the AI decided to show and the shopper's real budget,
-// and enforces the golden rule in code — the AI's opinion no longer matters here.
-function enforceBudget(productNames, aiOverBudgetNames, budget) {
-  if (budget === null || budget <= 0) {
-    // We don't know the budget yet (shopper hasn't stated one), so there's nothing
-    // to check against — pass everything through unchanged.
+// The real safety net. Takes what the AI decided to show and the shopper's real budget
+// range, and enforces the golden rule (plus the new minimum-budget rule) in code.
+function enforceBudgetRange(productNames, aiOverBudgetNames, budgetRange) {
+  const { min, max } = budgetRange;
+
+  if (min === null && max === null) {
+    // We don't know the budget yet, so there's nothing to check against.
     return { products: productNames, overBudget: aiOverBudgetNames };
   }
 
-  const maxAllowed = budget * (1 + OVER_BUDGET_ALLOWANCE);
+  const maxAllowed = max !== null ? max * (1 + OVER_BUDGET_ALLOWANCE) : null;
   const keptProducts = [];
   const correctedOverBudget = [];
 
@@ -73,12 +99,14 @@ function enforceBudget(productNames, aiOverBudgetNames, budget) {
     const product = PRODUCTS.find((p) => p.name === name);
     if (!product) continue; // not a real catalogue item — skip it
 
-    if (product.price > maxAllowed) {
-      // Breaks the golden rule outright — never shown, no matter what the AI said.
-      continue;
-    }
+    // Minimum budget: a hard cut, straight from "only show products above that budget".
+    if (min !== null && product.price < min) continue;
+
+    // Maximum budget: never above the 20% top-up line, no matter what the AI said.
+    if (maxAllowed !== null && product.price > maxAllowed) continue;
+
     keptProducts.push(name);
-    if (product.price > budget) {
+    if (max !== null && product.price > max) {
       // Between budget and the 20% top-up line — always label it, even if the AI forgot to.
       correctedOverBudget.push(name);
     }
@@ -159,21 +187,26 @@ exports.handler = async function (event) {
       parsed = { reply: rawText, products: [], overBudget: [] };
     }
 
-    // SESSION 10 FIX: don't trust the AI's budget maths — check it ourselves in code.
-    const shopperBudget = extractBudget(messages);
-    const { products: safeProducts, overBudget: safeOverBudget } = enforceBudget(
+    // SESSION 10 FIX 1: don't trust the AI's budget maths — check min AND max ourselves.
+    const shopperBudget = extractBudgetRange(messages);
+    const { products: safeProducts, overBudget: safeOverBudget } = enforceBudgetRange(
       parsed.products || [],
       parsed.overBudget || [],
       shopperBudget
     );
+
+    // SESSION 10 FIX 2: don't trust the AI's "three picks" — cap it here, keeping the
+    // AI's own order (it already ranks by best match, per Rule 5).
+    const finalProducts = safeProducts.slice(0, MAX_PICKS);
+    const finalOverBudget = safeOverBudget.filter((name) => finalProducts.includes(name));
 
     return {
       statusCode: 200,
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         reply: parsed.reply || rawText,
-        products: safeProducts,
-        overBudget: safeOverBudget,
+        products: finalProducts,
+        overBudget: finalOverBudget,
       }),
     };
   } catch (err) {
