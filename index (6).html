@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TruFit — Find Your Fit</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- STYLE QUIZ — Session 10. Shows on top of everything when the page loads.
+     Answers get sent along with chat messages so the AI can use them to rank
+     matches, but they never touch the size/budget rules — those are separate. -->
+<div class="quiz-overlay" id="quizOverlay">
+  <div class="quiz-card">
+    <button class="quiz-skip-all" id="quizSkipAll">Skip quiz</button>
+
+    <div class="quiz-progress">
+      <span class="quiz-dot active" data-step="0"></span>
+      <span class="quiz-dot" data-step="1"></span>
+      <span class="quiz-dot" data-step="2"></span>
+    </div>
+
+    <div class="quiz-step active" data-step="0">
+      <h2>What style are you into?</h2>
+      <p class="quiz-sub">Tap any that fit — or type your own</p>
+      <div class="quiz-chips" id="quizStyleChips"></div>
+      <input type="text" class="quiz-other" id="quizStyleOther" placeholder="Or type your own style...">
+      <div class="quiz-actions">
+        <button class="quiz-skip-btn" data-step="0">Skip</button>
+        <button class="quiz-next-btn" data-step="0">Next →</button>
+      </div>
+    </div>
+
+    <div class="quiz-step" data-step="1">
+      <h2>Where do you usually shop?</h2>
+      <p class="quiz-sub">Tap any that fit — or type your own</p>
+      <div class="quiz-chips" id="quizShopChips"></div>
+      <input type="text" class="quiz-other" id="quizShopOther" placeholder="Or type another shop...">
+      <div class="quiz-actions">
+        <button class="quiz-skip-btn" data-step="1">Skip</button>
+        <button class="quiz-next-btn" data-step="1">Next →</button>
+      </div>
+    </div>
+
+    <div class="quiz-step" data-step="2">
+      <h2>What are your preferred colours?</h2>
+      <p class="quiz-sub">Tap any that fit — or type your own</p>
+      <div class="quiz-chips" id="quizColourChips"></div>
+      <input type="text" class="quiz-other" id="quizColourOther" placeholder="Or type your own colour...">
+      <div class="quiz-actions">
+        <button class="quiz-skip-btn" data-step="2">Skip</button>
+        <button class="quiz-next-btn quiz-finish-btn" id="quizFinishBtn">See my matches →</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="app">
+
+  <header>
+    <div>
+      <h1>TruFit</h1>
+      <div class="tagline">Built by a teen, for teens</div>
+    </div>
+  </header>
+
+  <div class="tabs">
+    <button class="tab-btn active" data-screen="chatScreen">Chat</button>
+    <button class="tab-btn" data-screen="favesScreen">Faves</button>
+  </div>
+
+  <!-- CHAT SCREEN -->
+  <div class="screen active" id="chatScreen">
+    <div class="chat-log" id="chatLog"></div>
+    <div class="quick-replies" id="quickReplies"></div>
+    <div class="input-row">
+      <input type="text" id="userInput" placeholder="e.g. dress size 10 under £30 party trendy">
+      <button id="sendBtn">Send</button>
+    </div>
+  </div>
+
+  <!-- FAVES SCREEN -->
+  <div class="screen" id="favesScreen">
+    <div class="faves-list" id="favesList"></div>
+  </div>
+
+  <footer>TruFit — smart matches, zero scrolling</footer>
+</div>
+
+<script src="products.js"></script>
+<script src="app.js"></script>
+
+</body>
+</html>
