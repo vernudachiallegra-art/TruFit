@@ -11,6 +11,17 @@
   (via process.env.ANTHROPIC_API_KEY). The actual secret value is typed ONCE into
   Netlify's dashboard: Site settings → Environment variables → add ANTHROPIC_API_KEY.
   It is never written in this file, never committed to GitHub, and never sent to the browser.
+
+  SESSION 10 FIX:
+  The AI was asked (in system-prompt.js) to do budget maths itself — multiply the
+  shopper's budget by 1.2 and never show anything priced above that. AIs don't always
+  follow maths instructions perfectly, and real testing showed it slipping up (a £65
+  trainer got shown for a £35 budget with no warning label).
+  So this file no longer trusts the AI's maths. It works out the shopper's real budget
+  itself using plain JavaScript, then double-checks every product the AI picked against
+  the real price in the catalogue — deleting anything over budget and correcting the
+  "over budget" labels itself. The AI can still get it right or wrong; it no longer matters,
+  because JavaScript has the final say.
 */
 
 const { PRODUCTS } = require("../../products.js");
@@ -19,6 +30,62 @@ const { SYSTEM_PROMPT } = require("./system-prompt.js");
 // The cheapest current Claude Haiku model — fast and low-cost, which is what a
 // chat function that runs on every message needs.
 const MODEL = "claude-haiku-4-5-20251001";
+
+// Rule 4's allowance — kept as one named constant so it only ever needs changing in one place.
+const OVER_BUDGET_ALLOWANCE = 0.2; // 20%
+
+// Looks through the shopper's messages (most recent first) for a stated budget,
+// e.g. "under £35", "£35", "budget £35". Same pattern app.js's old parseQuery used,
+// so the two stay consistent. Returns a number, or null if no budget has been mentioned yet.
+function extractBudget(messages) {
+  let budget = null;
+  for (const m of messages) {
+    if (m.role !== "user") continue;
+    const text = typeof m.content === "string" ? m.content : "";
+    const lower = text.toLowerCase();
+    const match =
+      lower.match(/under\s*[£$]?\s*(\d{1,4})/) ||
+      lower.match(/[£$]\s*(\d{1,4})/) ||
+      lower.match(/budget\s*[£$]?\s*(\d{1,4})/);
+    if (match) {
+      // Keep overwriting as we go through in order, so the LATEST stated budget wins
+      // (e.g. if the shopper changes their mind partway through the chat).
+      budget = parseInt(match[1], 10);
+    }
+  }
+  return budget;
+}
+
+// The real safety net. Takes what the AI decided to show and the shopper's real budget,
+// and enforces the golden rule in code — the AI's opinion no longer matters here.
+function enforceBudget(productNames, aiOverBudgetNames, budget) {
+  if (budget === null || budget <= 0) {
+    // We don't know the budget yet (shopper hasn't stated one), so there's nothing
+    // to check against — pass everything through unchanged.
+    return { products: productNames, overBudget: aiOverBudgetNames };
+  }
+
+  const maxAllowed = budget * (1 + OVER_BUDGET_ALLOWANCE);
+  const keptProducts = [];
+  const correctedOverBudget = [];
+
+  for (const name of productNames) {
+    const product = PRODUCTS.find((p) => p.name === name);
+    if (!product) continue; // not a real catalogue item — skip it
+
+    if (product.price > maxAllowed) {
+      // Breaks the golden rule outright — never shown, no matter what the AI said.
+      continue;
+    }
+    keptProducts.push(name);
+    if (product.price > budget) {
+      // Between budget and the 20% top-up line — always label it, even if the AI forgot to.
+      correctedOverBudget.push(name);
+    }
+  }
+
+  return { products: keptProducts, overBudget: correctedOverBudget };
+}
 
 exports.handler = async function (event) {
   // Only accept POST requests (that's what app.js will send).
@@ -92,13 +159,21 @@ exports.handler = async function (event) {
       parsed = { reply: rawText, products: [], overBudget: [] };
     }
 
+    // SESSION 10 FIX: don't trust the AI's budget maths — check it ourselves in code.
+    const shopperBudget = extractBudget(messages);
+    const { products: safeProducts, overBudget: safeOverBudget } = enforceBudget(
+      parsed.products || [],
+      parsed.overBudget || [],
+      shopperBudget
+    );
+
     return {
       statusCode: 200,
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         reply: parsed.reply || rawText,
-        products: parsed.products || [],
-        overBudget: parsed.overBudget || [],
+        products: safeProducts,
+        overBudget: safeOverBudget,
       }),
     };
   } catch (err) {
