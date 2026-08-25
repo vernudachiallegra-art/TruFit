@@ -115,6 +115,35 @@ function enforceBudgetRange(productNames, aiOverBudgetNames, budgetRange) {
   return { products: keptProducts, overBudget: correctedOverBudget };
 }
 
+// SESSION 10: turns the shopper's style-quiz answers into an extra bit of system
+// prompt — clearly labelled as ranking guidance ONLY. It's added after the golden
+// rule and format instructions, and its wording makes clear it can never override
+// them. Even if the AI ignored that wording completely, it wouldn't matter: budget
+// and item count are already double-checked in code further down, regardless of
+// what the AI decides here.
+function buildPreferencesPrompt(preferences){
+  if(!preferences) return "";
+  const { styles, shops, colours } = preferences;
+  const hasAnything =
+    (styles && styles.length>0) || (shops && shops.length>0) || (colours && colours.length>0);
+  if(!hasAnything) return "";
+
+  return (
+    "\n\nShopper style profile (from a quick optional quiz before the chat started). " +
+    "Use this ONLY as a tiebreaker to help choose and order between items that already " +
+    "pass the size and budget rules — for example, prefer an item in one of their " +
+    "colours, or from one of their shops, over an equally valid alternative that isn't. " +
+    "This profile must NEVER be used to justify showing an item that is the wrong size " +
+    "or breaks the budget rule — those rules always come first, no matter what the " +
+    "shopper's style profile says:\n" +
+    JSON.stringify({
+      favouriteStyles: styles || [],
+      usualShops: shops || [],
+      preferredColours: colours || []
+    })
+  );
+}
+
 exports.handler = async function (event) {
   // Only accept POST requests (that's what app.js will send).
   if (event.httpMethod !== "POST") {
@@ -122,8 +151,9 @@ exports.handler = async function (event) {
   }
 
   try {
-    // app.js sends { messages: [...] } — the whole conversation so far.
-    const { messages } = JSON.parse(event.body);
+    // app.js sends { messages: [...], preferences: {...} } — the whole conversation
+    // so far, plus the shopper's style-quiz answers (if they didn't skip it).
+    const { messages, preferences } = JSON.parse(event.body);
 
     if (!Array.isArray(messages) || messages.length === 0) {
       return { statusCode: 400, body: JSON.stringify({ error: "No messages provided." }) };
@@ -137,6 +167,7 @@ exports.handler = async function (event) {
       "from this list, using their exact name, price and link — never invent a product, " +
       "price or link that isn't in here:\n" +
       JSON.stringify(PRODUCTS) +
+      buildPreferencesPrompt(preferences) +
       // This bit isn't one of Allegra's rules — it's a technical formatting instruction so
       // app.js can turn the AI's answer back into real clickable product cards.
       "\n\nIMPORTANT — reply format: respond with ONLY valid JSON, no other text and no " +
